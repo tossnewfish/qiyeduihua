@@ -1,0 +1,17 @@
+[
+  {
+    "question": "如果知识库证据不足，系统应该如何回答？",
+    "expected_sources": ["company_policy.md"],
+    "expect_refusal": false
+  },
+  {
+    "question": "Agent 系统为什么要优先使用工具检索？",
+    "expected_sources": ["agent_design.md"],
+    "expect_refusal": false
+  },
+  {
+    "question": "公司 2028 年的年终奖计算公式是什么？",
+    "expected_sources": [],
+    "expect_refusal": true
+  }
+]

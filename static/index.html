@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>企业知识库问答 Agent</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 0; background: #f5f7fb; }
+    .wrap { max-width: 980px; margin: 32px auto; padding: 24px; background: white; border-radius: 16px; box-shadow: 0 8px 32px rgba(0,0,0,0.08); }
+    textarea { width: 100%; min-height: 120px; padding: 12px; border-radius: 12px; border: 1px solid #d0d7e2; box-sizing: border-box; resize: vertical; }
+    button { margin-top: 12px; margin-right: 8px; padding: 10px 16px; border: none; border-radius: 10px; background: #2563eb; color: white; cursor: pointer; }
+    button.secondary { background: #475569; }
+    .grid { display: grid; grid-template-columns: 2fr 1fr; gap: 16px; }
+    .card { margin-top: 18px; padding: 16px; border-radius: 12px; background: #f8fafc; border: 1px solid #e5e7eb; }
+    .muted { color: #64748b; font-size: 14px; }
+    code { background: #eef2ff; padding: 2px 6px; border-radius: 6px; }
+    pre { white-space: pre-wrap; word-break: break-word; margin: 0; }
+    .pill { display: inline-block; padding: 2px 8px; border-radius: 999px; background: #e2e8f0; margin-right: 8px; margin-bottom: 8px; font-size: 12px; }
+    @media (max-width: 860px) { .grid { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>企业知识库问答 Agent</h1>
+    <p class="muted">增强版 Demo：支持多轮对话、真正的 SSE 流式输出、混合检索、低置信拒答、增量知识更新与基础评测。</p>
+
+    <textarea id="message" placeholder="试着提问：如果知识库证据不足，系统应该如何回答？"></textarea>
+    <div>
+      <button onclick="sendMessage()">发送（流式）</button>
+      <button class="secondary" onclick="clearSession()">清空会话</button>
+    </div>
+
+    <div class="grid">
+      <div>
+        <div class="card">
+          <div class="muted">回答</div>
+          <pre id="answer"></pre>
+        </div>
+      </div>
+      <div>
+        <div class="card">
+          <div class="muted">引用来源</div>
+          <div id="refs"></div>
+        </div>
+        <div class="card">
+          <div class="muted">检索状态</div>
+          <div id="retrieval"></div>
+        </div>
+        <div class="card">
+          <div class="muted">工具轨迹</div>
+          <pre id="traces"></pre>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let sessionId = localStorage.getItem("agent_session_id") || "";
+
+    function renderRefs(refs) {
+      document.getElementById("refs").innerHTML = (refs || []).map(x => `<span class="pill">${x}</span>`).join("") || "无";
+    }
+
+    function renderRetrieval(meta) {
+      if (!meta) {
+        document.getElementById("retrieval").textContent = "无";
+        return;
+      }
+      document.getElementById("retrieval").innerHTML = Object.entries(meta)
+        .map(([k, v]) => `<div><code>${k}</code>: ${v}</div>`).join("");
+    }
+
+    async function sendMessage() {
+      const message = document.getElementById("message").value.trim();
+      if (!message) return;
+
+      document.getElementById("answer").textContent = "";
+      document.getElementById("refs").textContent = "";
+      document.getElementById("retrieval").textContent = "";
+      document.getElementById("traces").textContent = "";
+
+      const response = await fetch("/chat/stream", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message, session_id: sessionId })
+      });
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder("utf-8");
+      let buffer = "";
+      let currentEvent = "";
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        while (buffer.includes("\n\n")) {
+          const chunk = buffer.slice(0, buffer.indexOf("\n\n"));
+          buffer = buffer.slice(buffer.indexOf("\n\n") + 2);
+          const lines = chunk.split("\n");
+          let data = "";
+          for (const line of lines) {
+            if (line.startsWith("event:")) currentEvent = line.replace("event:", "").trim();
+            if (line.startsWith("data:")) data += line.replace("data:", "").trim();
+          }
+          if (!data) continue;
+          const payload = JSON.parse(data);
+          if (currentEvent === "meta") {
+            sessionId = payload.session_id;
+            localStorage.setItem("agent_session_id", sessionId);
+            renderRefs(payload.references || []);
+            renderRetrieval(payload.retrieval_meta || {});
+          } else if (currentEvent === "delta") {
+            document.getElementById("answer").textContent += payload.content;
+          } else if (currentEvent === "done") {
+            renderRefs(payload.references || []);
+            renderRetrieval(payload.retrieval_meta || {});
+            document.getElementById("traces").textContent = JSON.stringify(payload.tool_traces || [], null, 2);
+          }
+        }
+      }
+    }
+
+    async function clearSession() {
+      if (!sessionId) return;
+      await fetch(`/session/${sessionId}`, { method: 'DELETE' });
+      localStorage.removeItem("agent_session_id");
+      sessionId = "";
+      document.getElementById("answer").textContent = "";
+      document.getElementById("refs").textContent = "";
+      document.getElementById("retrieval").textContent = "";
+      document.getElementById("traces").textContent = "";
+    }
+  </script>
+</body>
+</html>
